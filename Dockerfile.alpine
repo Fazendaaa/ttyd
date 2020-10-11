@@ -1,0 +1,70 @@
+FROM alpine:3.12 AS CROSS
+
+RUN [ "apk", "add", "--no-cache", \
+    "alpine-sdk==1.0-r0", \
+    "autoconf==2.69-r2", \
+    "automake==1.16.2-r0", \
+    "cmake==3.17.2-r0", \
+    "curl==7.69.1-r1", \
+    "git==2.26.2-r0", \
+    "libtool==2.4.6-r7", \
+    "unzip==6.0-r8" \
+]
+
+RUN git clone https://github.com/tsl0922/dockerfiles/ /cross
+
+WORKDIR /cross/musl-cross
+
+RUN cp config.mak /tmp/config.mak
+RUN curl -sLo- https://github.com/richfelker/musl-cross-make/archive/v0.9.9.tar.gz | tar xz -C /tmp/
+RUN curl -sLo /tmp/1.diff https://github.com/richfelker/musl-cross-make/commit/a54eb56f33f255dfca60be045f12a5cfaf5a72a9.patch
+
+WORKDIR /tmp/musl-cross-make-0.9.9/
+
+RUN mv /tmp/config.mak .
+RUN patch -p1 /tmp/1.diff
+RUN TARGET=i386-linux-musl make install
+RUN TARGET=x86_64-linux-musl make install
+RUN TARGET=aarch64-linux-musl make install
+RUN TARGET=arm-linux-musleabihf make install
+RUN TARGET=arm-linux-musleabi make install
+RUN TARGET=mips-linux-musl make install
+RUN TARGET=mipsel-linux-musl make install
+RUN TARGET=mips64-linux-musl make install
+RUN TARGET=mips64el-linux-musl make install
+
+FROM alpine:3.12 AS BUILDER
+
+COPY --from=CROSS /opt/cross/bin /opt/cross/bin
+ARG PATH="${PATH}:/opt/cross/bin"
+
+RUN [ "apk", "add", "--no-cache", \
+    "alpine-sdk==1.0-r0", \
+    "autoconf==2.69-r2", \
+    "automake==1.16.2-r0", \
+    "bash==5.0.17-r0", \
+    "cmake==3.17.2-r0", \
+    "curl==7.69.1-r1", \
+    "git==2.26.2-r0", \
+    "libtool==2.4.6-r7", \
+    "unzip==6.0-r8" \
+]
+
+ARG TTYD_VERSION=1.6.1
+
+RUN git clone --depth=1 --branch=${TTYD_VERSION} \
+    https://github.com/tsl0922/ttyd.git /ttyd
+
+WORKDIR /ttyd
+
+ARG WITH_SSL=true
+COPY selectArch.sh .
+RUN WITH_SSL=true bash ./scripts/cross-build.sh $(./selectArch.sh)
+
+FROM alpine:3.12 AS RUNNER
+
+COPY --from=BUILDER /ttyd/build/ttyd /usr/bin/ttyd
+
+EXPOSE 7681
+ENTRYPOINT [ "/sbin/tini", "--" ] 
+CMD [ "ttyd", "bash" ]
